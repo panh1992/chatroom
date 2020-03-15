@@ -2,7 +2,9 @@ package net.library.clink.box;
 
 import net.library.clink.core.SendPacket;
 
-public class StringSendPacket extends SendPacket {
+import java.io.ByteArrayInputStream;
+
+public class StringSendPacket extends SendPacket<ByteArrayInputStream> {
 
     private final byte[] bytes;
 
@@ -12,12 +14,7 @@ public class StringSendPacket extends SendPacket {
     }
 
     @Override
-    public byte[] bytes() {
-        return this.bytes;
+    protected ByteArrayInputStream createStream() {
+        return new ByteArrayInputStream(bytes);
     }
-
-    @Override
-    public void close() {
-    }
-
 }

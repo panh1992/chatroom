@@ -29,24 +29,14 @@ public interface IOProvider extends Closeable {
     }
 
     abstract class HandleOutputCallback implements Runnable {
-        private Object attach;
 
         @Override
         public final void run() {
-            canProviderOutput(attach);
+            canProviderOutput();
         }
 
-        public final void setAttach(Object attach) {
-            this.attach = attach;
-        }
+        protected abstract void canProviderOutput();
 
-        public final <T> T getAttach() {
-            @SuppressWarnings({"UnnecessaryLocalVariable", "unchecked"})
-            T attach = (T) this.attach;
-            return attach;
-        }
-
-        protected abstract void canProviderOutput(Object attach);
     }
 
 }

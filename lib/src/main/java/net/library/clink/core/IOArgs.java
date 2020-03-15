@@ -3,32 +3,48 @@ package net.library.clink.core;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SocketChannel;
+import java.nio.channels.WritableByteChannel;
 
 public class IOArgs {
 
-    private int limit = 256;
+    private int limit = 5;
 
-    private byte[] byteBuffer = new byte[256];
-
-    private ByteBuffer buffer = ByteBuffer.wrap(byteBuffer);
+    private ByteBuffer buffer = ByteBuffer.allocate(limit);
 
     /**
-     * 从bytes中读取数据
+     * 从channel中读取数据
      */
-    public int readFrom(byte[] bytes, int offset) {
-        int size = Math.min(bytes.length - offset, buffer.remaining());
-        buffer.put(bytes, offset, size);
-        return size;
+    public int readFrom(ReadableByteChannel readableByteChannel) throws IOException {
+        startWriting();
+
+        int bytesProduced = 0;
+        while (buffer.hasRemaining()) {
+            int length = readableByteChannel.read(buffer);
+            if (length < 0) {
+                throw new EOFException();
+            }
+            bytesProduced += length;
+        }
+
+        finishWriting();
+        return bytesProduced;
     }
 
     /**
-     * 写入数据到bytes中
+     * 写入数据到channel中
      */
-    public int writeTo(byte[] bytes, int offset) {
-        int size = Math.min(bytes.length - offset, buffer.remaining());
-        buffer.get(bytes, offset, size);
-        return size;
+    public int writeTo(WritableByteChannel writableByteChannel) throws IOException {
+        int bytesProduced = 0;
+        while (buffer.hasRemaining()) {
+            int length = writableByteChannel.write(buffer);
+            if (length < 0) {
+                throw new EOFException();
+            }
+            bytesProduced += length;
+        }
+        return bytesProduced;
     }
 
     /**
@@ -89,7 +105,9 @@ public class IOArgs {
     }
 
     public void writeLength(int total) {
+        startWriting();
         buffer.putInt(total);
+        finishWriting();
     }
 
     public int readLength() {
@@ -100,11 +118,25 @@ public class IOArgs {
         return buffer.capacity();
     }
 
-    public interface IOArgsEventListener {
+    /**
+     * IOArgs 提供者、处理者；数据的生产或消费者
+     */
+    public interface IOArgsEventProcessor {
 
-        void onStarted(IOArgs args);
+        /**
+         * 提供一份可消费的IOArgs
+         */
+        IOArgs provideIOArgs();
 
-        void onCompleted(IOArgs args);
+        /**
+         * 消费成功时回调
+         */
+        void onConsumeCompleted(IOArgs args);
+
+        /**
+         * 消费异常时回调
+         */
+        void onConsumeFailed(IOArgs args, Exception ex);
 
     }
 

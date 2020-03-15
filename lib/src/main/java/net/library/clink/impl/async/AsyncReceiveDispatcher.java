@@ -1,5 +1,6 @@
 package net.library.clink.impl.async;
 
+import lombok.extern.log4j.Log4j2;
 import net.library.clink.box.StringReceivePacket;
 import net.library.clink.core.IOArgs;
 import net.library.clink.core.ReceiveDispatcher;
@@ -8,10 +9,13 @@ import net.library.clink.core.Receiver;
 import net.library.clink.util.CloseUtil;
 
 import java.io.IOException;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class AsyncReceiveDispatcher implements ReceiveDispatcher {
+@Log4j2
+public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsEventProcessor {
 
     private final AtomicBoolean isClosed;
 
@@ -21,38 +25,17 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher {
 
     private IOArgs ioArgs;
 
-    private ReceivePacket tempPacket;
+    private ReceivePacket<?> packet;
 
-    private byte[] buffer;
+    private WritableByteChannel packetChannel;
 
-    private int total;
+    private long total;
 
-    private int position;
+    private long position;
 
     public AsyncReceiveDispatcher(Receiver receiver, ReceiveRacketCallback receiveRacketCallback) {
         this.receiver = receiver;
-        this.receiver.serReceiveListener(new IOArgs.IOArgsEventListener() {
-
-            @Override
-            public void onStarted(IOArgs args) {
-                int receiveSize;
-                if (Objects.isNull(tempPacket)) {
-                    receiveSize = 4;
-                } else {
-                    receiveSize = Math.min(total - position, args.capacity());
-                }
-                //  设置本次接收数据大小
-                args.limit(receiveSize);
-            }
-
-            @Override
-            public void onCompleted(IOArgs args) {
-                assemblePacket(args);
-                // 继续接收下一条数据
-                registerReceive();
-            }
-
-        });
+        this.receiver.setReceiveListener(this);
         this.receiveRacketCallback = receiveRacketCallback;
         this.isClosed = new AtomicBoolean(false);
         this.ioArgs = new IOArgs();
@@ -71,9 +54,7 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher {
     @Override
     public void close() {
         if (isClosed.compareAndSet(false, true)) {
-            if (Objects.nonNull(tempPacket)) {
-                CloseUtil.close(tempPacket);
-            }
+            completePacket(false);
         }
     }
 
@@ -83,7 +64,7 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher {
 
     private void registerReceive() {
         try {
-            receiver.receiveAsync(ioArgs);
+            receiver.postReceiveAsync();
         } catch (IOException e) {
             closeAndNotify();
         }
@@ -93,28 +74,58 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher {
      * 解析数据到Packet
      */
     private void assemblePacket(IOArgs args) {
-        if (Objects.isNull(tempPacket)) {
+        if (Objects.isNull(packet)) {
             int length = args.readLength();
-            tempPacket = new StringReceivePacket(length);
-            buffer = new byte[length];
+            packet = new StringReceivePacket(length);
+            packetChannel = Channels.newChannel(packet.open());
             total = length;
             position = 0;
         }
-        int count = args.writeTo(buffer, 0);
-        if (count > 0) {
-            tempPacket.save(buffer, count);
+        try {
+            int count = args.writeTo(packetChannel);
             position += count;
             // 检查是否完成一份Packet数据
             if (position == total) {
-                completePacket();
-                tempPacket = null;
+                completePacket(true);
             }
+        } catch (IOException e) {
+            log.error(e);
+            completePacket(false);
         }
     }
 
-    private void completePacket() {
-        CloseUtil.close(this.tempPacket);
-        receiveRacketCallback.onReceivePacketCompleted(tempPacket);
+    private void completePacket(boolean isSucceed) {
+        CloseUtil.close(packet, packetChannel);
+        if (Objects.nonNull(packet)) {
+            receiveRacketCallback.onReceivePacketCompleted(packet);
+        }
+        packet = null;
+        packetChannel = null;
+    }
+
+    @Override
+    public IOArgs provideIOArgs() {
+        int receiveSize;
+        if (Objects.isNull(packet)) {
+            receiveSize = 4;
+        } else {
+            receiveSize = (int) Math.min(total - position, ioArgs.capacity());
+        }
+        //  设置本次接收数据大小
+        ioArgs.limit(receiveSize);
+        return ioArgs;
+    }
+
+    @Override
+    public void onConsumeCompleted(IOArgs args) {
+        assemblePacket(args);
+        // 继续接收下一条数据
+        registerReceive();
+    }
+
+    @Override
+    public void onConsumeFailed(IOArgs args, Exception ex) {
+        log.error(ex);
     }
 
 }

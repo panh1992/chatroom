@@ -20,11 +20,9 @@ public class SocketChannelAdapter implements Sender, Receiver {
 
     private final OnChannelStatusChangedListener listener;
 
-    private IOArgs.IOArgsEventListener receiveIOEventListener;
+    private IOArgs.IOArgsEventProcessor receiveIOEventProcessor;
 
-    private IOArgs.IOArgsEventListener sendIOEventListener;
-
-    private IOArgs tempReceiveArgs;
+    private IOArgs.IOArgsEventProcessor sendIOEventProcessor;
 
     public SocketChannelAdapter(SocketChannel socketChannel, IOProvider ioProvider,
                                 OnChannelStatusChangedListener listener) throws IOException {
@@ -34,21 +32,46 @@ public class SocketChannelAdapter implements Sender, Receiver {
         this.socketChannel.configureBlocking(false);
     }
 
+    @Override
+    public void setReceiveListener(IOArgs.IOArgsEventProcessor processor) {
+        this.receiveIOEventProcessor = processor;
+    }
+
+    @Override
+    public boolean postReceiveAsync() throws IOException {
+        if (isClosed.get()) {
+            throw new IOException("Current channel is closed!");
+        }
+        return ioProvider.registerInput(socketChannel, inputCallBack);
+    }
+
+    @Override
+    public void setSendListener(IOArgs.IOArgsEventProcessor processor) {
+        this.sendIOEventProcessor = processor;
+    }
+
+    @Override
+    public boolean postSendAsync() throws IOException {
+        if (isClosed.get()) {
+            throw new IOException("Current channel is closed!");
+        }
+        return ioProvider.registerOutput(socketChannel, outputCallBack);
+    }
+
     private IOProvider.HandleInputCallBack inputCallBack = new IOProvider.HandleInputCallBack() {
         @Override
         protected void canProviderInput() {
             if (isClosed.get()) {
                 return;
             }
-            receiveIOEventListener.onStarted(tempReceiveArgs);
-
+            IOArgs ioArgs = receiveIOEventProcessor.provideIOArgs();
             try {
                 // 具体的读取操作
-                if (tempReceiveArgs.readFrom(socketChannel) > 0) {
+                if (ioArgs.readFrom(socketChannel) > 0) {
                     // 读取完成回调
-                    receiveIOEventListener.onCompleted(tempReceiveArgs);
+                    receiveIOEventProcessor.onConsumeCompleted(ioArgs);
                 } else {
-                    throw new IOException("Cannot read any data!");
+                    receiveIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot read any data!"));
                 }
             } catch (IOException ignored) {
                 CloseUtil.close(SocketChannelAdapter.this);
@@ -57,51 +80,27 @@ public class SocketChannelAdapter implements Sender, Receiver {
     };
 
     private IOProvider.HandleOutputCallback outputCallBack = new IOProvider.HandleOutputCallback() {
+
         @Override
-        protected void canProviderOutput(Object attach) {
+        protected void canProviderOutput() {
             if (isClosed.get()) {
                 return;
             }
-            IOArgs ioArgs = getAttach();
-            sendIOEventListener.onStarted(ioArgs);
+            IOArgs ioArgs = sendIOEventProcessor.provideIOArgs();
             try {
                 // 具体的发送操作
                 if (ioArgs.writeTo(socketChannel) > 0) {
                     // 发送完成回调
-                    sendIOEventListener.onCompleted(ioArgs);
+                    sendIOEventProcessor.onConsumeCompleted(ioArgs);
                 } else {
-                    throw new IOException("Cannot write any data!");
+                    sendIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot write any data!"));
                 }
             } catch (IOException ignored) {
                 CloseUtil.close(SocketChannelAdapter.this);
             }
         }
+
     };
-
-    @Override
-    public void serReceiveListener(IOArgs.IOArgsEventListener listener) {
-        receiveIOEventListener = listener;
-    }
-
-    @Override
-    public boolean receiveAsync(IOArgs ioArgs) throws IOException {
-        if (isClosed.get()) {
-            throw new IOException("Current channel is closed!");
-        }
-        this.tempReceiveArgs = ioArgs;
-        return ioProvider.registerInput(socketChannel, inputCallBack);
-    }
-
-    @Override
-    public boolean sendAsync(IOArgs args, IOArgs.IOArgsEventListener listener) throws IOException {
-        if (isClosed.get()) {
-            throw new IOException("Current channel is closed!");
-        }
-        sendIOEventListener = listener;
-        // 当前发送的数据附加到回调中
-        outputCallBack.setAttach(args);
-        return ioProvider.registerOutput(socketChannel, outputCallBack);
-    }
 
     @Override
     public void close() {
