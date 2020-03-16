@@ -1,6 +1,7 @@
 package net.library.clink.core;
 
 import java.io.Closeable;
+import java.io.InputStream;
 
 /**
  * 发送数据的调度者
@@ -14,13 +15,13 @@ public interface SendDispatcher extends Closeable {
      *
      * @param packet 数据
      */
-    void send(SendPacket packet);
+    void send(SendPacket<? extends InputStream> packet);
 
     /**
      * 取消发送数据
      *
      * @param packet 数据
      */
-    void cancel(SendPacket packet);
+    void cancel(SendPacket<? extends InputStream> packet);
 
 }

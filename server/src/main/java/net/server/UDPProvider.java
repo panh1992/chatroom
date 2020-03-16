@@ -1,7 +1,7 @@
 package net.server;
 
 import lombok.extern.log4j.Log4j2;
-import net.foo.constant.UDPConstant;
+import net.common.constant.UDPConstant;
 import net.library.clink.util.ByteUtil;
 
 import java.io.IOException;

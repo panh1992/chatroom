@@ -1,31 +1,24 @@
 package net.library.clink.box;
 
-import net.library.clink.core.ReceivePacket;
-
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 
-public class StringReceivePacket extends ReceivePacket<ByteArrayOutputStream> {
+/**
+ * 字符串接收包
+ */
+public class StringReceivePacket extends AbsByteArrayReceivePacket<String> {
 
-    private String string;
-
-    public StringReceivePacket(int length) {
-        this.length = length;
-    }
-
-    public String string() {
-        return string;
+    public StringReceivePacket(long length) {
+        super(length);
     }
 
     @Override
-    protected void closeStream(ByteArrayOutputStream byteArrayOutputStream) throws IOException {
-        super.closeStream(byteArrayOutputStream);
-        string = new String(byteArrayOutputStream.toByteArray());
+    protected String buildEntity(ByteArrayOutputStream stream) {
+        return new String(stream.toByteArray());
     }
 
     @Override
-    protected ByteArrayOutputStream createStream() {
-        return new ByteArrayOutputStream((int) this.length);
+    public byte type() {
+        return TYPE_MEMORY_STRING;
     }
 
 }

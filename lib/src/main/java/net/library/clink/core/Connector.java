@@ -1,22 +1,26 @@
 package net.library.clink.core;
 
 import lombok.extern.log4j.Log4j2;
+import net.library.clink.box.BytesReceivePacket;
+import net.library.clink.box.FileReceivePacket;
 import net.library.clink.box.StringReceivePacket;
 import net.library.clink.box.StringSendPacket;
 import net.library.clink.impl.SocketChannelAdapter;
 import net.library.clink.impl.async.AsyncReceiveDispatcher;
 import net.library.clink.impl.async.AsyncSendDispatcher;
 
+import java.io.ByteArrayInputStream;
 import java.io.Closeable;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.channels.SocketChannel;
-import java.util.Objects;
 import java.util.UUID;
 
 @Log4j2
-public class Connector implements SocketChannelAdapter.OnChannelStatusChangedListener, Closeable {
+public abstract class Connector implements SocketChannelAdapter.OnChannelStatusChangedListener, Closeable {
 
-    private UUID key = UUID.randomUUID();
+    protected UUID key = UUID.randomUUID();
 
     private SocketChannel socketChannel;
 
@@ -38,15 +42,40 @@ public class Connector implements SocketChannelAdapter.OnChannelStatusChangedLis
         this.receiver = adapter;
 
         this.sendDispatcher = new AsyncSendDispatcher(sender);
-        this.receiveDispatcher = new AsyncReceiveDispatcher(receiver, receiveRacketCallback);
+        this.receiveDispatcher = new AsyncReceiveDispatcher(receiver, new ReceiveDispatcher.ReceiveRacketCallback() {
+            @Override
+            public ReceivePacket<?, ?> onArrivedNewPacket(byte type, long length) {
+                switch (type) {
+                    case Packet.TYPE_MEMORY_BYTES:
+                        return new BytesReceivePacket(length);
+                    case Packet.TYPE_MEMORY_STRING:
+                        return new StringReceivePacket(length);
+                    case Packet.TYPE_STREAM_FILE:
+                        return new FileReceivePacket(length, createNewReceiveFile());
+                    case Packet.TYPE_STREAM_DIRECT:
+                        return new BytesReceivePacket(length);
+                    default:
+                        throw new UnsupportedOperationException("Unsupported packet type:" + type);
+                }
+            }
+
+            @Override
+            public void onReceivePacketCompleted(ReceivePacket<?, ?> packet) {
+                onReceivedPacket(packet);
+            }
+        });
 
         // 启动接收
         this.receiveDispatcher.start();
     }
 
     public void send(String msg) {
-        SendPacket sendPacket = new StringSendPacket(msg);
+        SendPacket<ByteArrayInputStream> sendPacket = new StringSendPacket(msg);
         sendDispatcher.send(sendPacket);
+    }
+
+    public void send(SendPacket<? extends InputStream> packet) {
+        sendDispatcher.send(packet);
     }
 
     @Override
@@ -63,15 +92,10 @@ public class Connector implements SocketChannelAdapter.OnChannelStatusChangedLis
 
     }
 
-    protected void onReceiveNewMessage(String str) {
-        log.info("{}: {}", key.toString(), str);
+    protected void onReceivedPacket(ReceivePacket<?, ?> packet) {
+        log.info("{}: [New Packet]-Type:{}, Length:{}", key, packet.type(), packet.length());
     }
 
-    private ReceiveDispatcher.ReceiveRacketCallback receiveRacketCallback = packet -> {
-        if (packet instanceof StringReceivePacket) {
-            String msg = ((StringReceivePacket) packet).string();
-            onReceiveNewMessage(msg);
-        }
-    };
+    protected abstract File createNewReceiveFile();
 
 }

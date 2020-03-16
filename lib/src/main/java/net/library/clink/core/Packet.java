@@ -8,39 +8,74 @@ import java.util.Objects;
  * 公共的数据封装
  * 提供了类型以及基本的长度的定义
  */
-public abstract class Packet<T extends Closeable> implements Closeable {
+public abstract class Packet<Stream extends Closeable> implements Closeable {
 
-    protected byte type;
+    // BYTES 类型
+    public static final byte TYPE_MEMORY_BYTES = 1;
+
+    // String 类型
+    public static final byte TYPE_MEMORY_STRING = 2;
+
+    // 文件 类型
+    public static final byte TYPE_STREAM_FILE = 3;
+
+    // 长连接流 类型
+    public static final byte TYPE_STREAM_DIRECT = 4;
 
     protected long length;
 
-    private T stream;
-
-    public byte type() {
-        return type;
-    }
+    private Stream stream;
 
     public long length() {
         return length;
     }
 
-    public final T open() {
+    /**
+     * 类型，直接通过方法得到：
+     * {@link #TYPE_MEMORY_BYTES}
+     * {@link #TYPE_MEMORY_STRING}
+     * {@link #TYPE_STREAM_FILE}
+     * {@link #TYPE_STREAM_DIRECT}
+     *
+     * @return 类型
+     */
+    public abstract byte type();
+
+    /**
+     * 对外获取当前实例的流操作
+     */
+    public final Stream open() {
         if (Objects.isNull(stream)) {
             stream = createStream();
         }
         return stream;
     }
 
-    protected abstract T createStream();
+    /**
+     * 创建流操作，应当将当前需要传输的数据转化为流
+     *
+     * @return {@link java.io.InputStream} or {@link java.io.OutputStream}
+     */
+    protected abstract Stream createStream();
 
-    protected void closeStream(T stream) throws IOException {
+    /**
+     * 关闭流， 当前方法会调用流的关闭操作
+     *
+     * @param stream 待关闭的流
+     * @throws IOException 抛出异常
+     */
+    protected void closeStream(Stream stream) throws IOException {
         stream.close();
     }
 
+    /**
+     * 对外的关闭资源操作
+     */
     @Override
     public final void close() throws IOException {
         if (Objects.nonNull(stream)) {
             closeStream(stream);
+            stream = null;
         }
     }
 

@@ -1,8 +1,8 @@
 package net.library.clink.impl.async;
 
 import lombok.extern.log4j.Log4j2;
-import net.library.clink.box.StringReceivePacket;
 import net.library.clink.core.IOArgs;
+import net.library.clink.core.Packet;
 import net.library.clink.core.ReceiveDispatcher;
 import net.library.clink.core.ReceivePacket;
 import net.library.clink.core.Receiver;
@@ -25,7 +25,7 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
 
     private IOArgs ioArgs;
 
-    private ReceivePacket<?> packet;
+    private ReceivePacket<?, ?> packet;
 
     private WritableByteChannel packetChannel;
 
@@ -76,7 +76,9 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
     private void assemblePacket(IOArgs args) {
         if (Objects.isNull(packet)) {
             int length = args.readLength();
-            packet = new StringReceivePacket(length);
+            // TODO: 临时解决方案
+            byte type = length > 200 ? Packet.TYPE_STREAM_FILE : Packet.TYPE_MEMORY_STRING;
+            packet = receiveRacketCallback.onArrivedNewPacket(type, length);
             packetChannel = Channels.newChannel(packet.open());
             total = length;
             position = 0;

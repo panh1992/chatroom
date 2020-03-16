@@ -1,4 +1,4 @@
-package net.foo.constant;
+package net.common.constant;
 
 public class TCPConstant {
 

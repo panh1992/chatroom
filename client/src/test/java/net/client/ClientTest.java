@@ -2,8 +2,10 @@ package net.client;
 
 import lombok.extern.log4j.Log4j2;
 import net.client.bean.ServerInfo;
+import net.common.Common;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,7 +28,8 @@ class ClientTest {
         final List<TCPClient> tcpClients = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             try {
-                TCPClient tcpClient = TCPClient.startWith(serverInfo);
+                File cachePath = Common.getCacheDir("client/text" + i);
+                TCPClient tcpClient = TCPClient.startWith(serverInfo, cachePath);
                 if (Objects.isNull(tcpClient)) {
                     log.error("连接异常");
                     continue;

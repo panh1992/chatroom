@@ -4,10 +4,9 @@ import lombok.extern.log4j.Log4j2;
 import net.library.clink.util.CloseUtil;
 import net.server.handler.ClientHandler;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
@@ -24,6 +23,8 @@ public class TCPServer implements ClientHandler.CloseNotifyCallBack {
 
     private final int port;
 
+    private final File cachePath;
+
     private ClientListener clientListener;
 
     private List<ClientHandler> clientHandlerList;
@@ -34,8 +35,9 @@ public class TCPServer implements ClientHandler.CloseNotifyCallBack {
 
     private ServerSocketChannel serverSocketChannel;
 
-    public TCPServer(int port) {
+    public TCPServer(int port, File cachePath) {
         this.port = port;
+        this.cachePath = cachePath;
         this.clientHandlerList = new ArrayList<>();
         // 转发线程池
         this.forwardingThreadPoolExecutor = Executors.newSingleThreadExecutor();
@@ -134,7 +136,8 @@ public class TCPServer implements ClientHandler.CloseNotifyCallBack {
                             // 非阻塞状态拿到客户端连接
                             SocketChannel socketChannel = serverSocketChannel.accept();
                             try {
-                                ClientHandler clientHandler = new ClientHandler(socketChannel, TCPServer.this);
+                                ClientHandler clientHandler = new ClientHandler(socketChannel,
+                                        TCPServer.this, TCPServer.this.cachePath);
                                 synchronized (TCPServer.this) {
                                     clientHandlerList.add(clientHandler);
                                 }
