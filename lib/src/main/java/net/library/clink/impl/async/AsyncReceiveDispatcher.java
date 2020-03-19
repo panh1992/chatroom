@@ -2,20 +2,18 @@ package net.library.clink.impl.async;
 
 import lombok.extern.log4j.Log4j2;
 import net.library.clink.core.IOArgs;
-import net.library.clink.core.Packet;
 import net.library.clink.core.ReceiveDispatcher;
 import net.library.clink.core.ReceivePacket;
 import net.library.clink.core.Receiver;
 import net.library.clink.util.CloseUtil;
 
 import java.io.IOException;
-import java.nio.channels.Channels;
-import java.nio.channels.WritableByteChannel;
-import java.util.Objects;
+import java.io.OutputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Log4j2
-public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsEventProcessor {
+public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsEventProcessor,
+        AsyncPacketWriter.PacketProvider {
 
     private final AtomicBoolean isClosed;
 
@@ -23,22 +21,17 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
 
     private final ReceiveRacketCallback receiveRacketCallback;
 
-    private IOArgs ioArgs;
+    private final AsyncPacketWriter writer;
 
-    private ReceivePacket<?, ?> packet;
-
-    private WritableByteChannel packetChannel;
-
-    private long total;
-
-    private long position;
+    {
+        this.isClosed = new AtomicBoolean(false);
+        this.writer = new AsyncPacketWriter(this);
+    }
 
     public AsyncReceiveDispatcher(Receiver receiver, ReceiveRacketCallback receiveRacketCallback) {
         this.receiver = receiver;
         this.receiver.setReceiveListener(this);
         this.receiveRacketCallback = receiveRacketCallback;
-        this.isClosed = new AtomicBoolean(false);
-        this.ioArgs = new IOArgs();
     }
 
     @Override
@@ -52,9 +45,9 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
     }
 
     @Override
-    public void close() {
+    public void close() throws IOException {
         if (isClosed.compareAndSet(false, true)) {
-            completePacket(false);
+            writer.close();
         }
     }
 
@@ -70,57 +63,16 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
         }
     }
 
-    /**
-     * 解析数据到Packet
-     */
-    private void assemblePacket(IOArgs args) {
-        if (Objects.isNull(packet)) {
-            int length = args.readLength();
-            // TODO: 临时解决方案
-            byte type = length > 200 ? Packet.TYPE_STREAM_FILE : Packet.TYPE_MEMORY_STRING;
-            packet = receiveRacketCallback.onArrivedNewPacket(type, length);
-            packetChannel = Channels.newChannel(packet.open());
-            total = length;
-            position = 0;
-        }
-        try {
-            int count = args.writeTo(packetChannel);
-            position += count;
-            // 检查是否完成一份Packet数据
-            if (position == total) {
-                completePacket(true);
-            }
-        } catch (IOException e) {
-            log.error(e);
-            completePacket(false);
-        }
-    }
-
-    private void completePacket(boolean isSucceed) {
-        CloseUtil.close(packet, packetChannel);
-        if (Objects.nonNull(packet)) {
-            receiveRacketCallback.onReceivePacketCompleted(packet);
-        }
-        packet = null;
-        packetChannel = null;
-    }
-
     @Override
     public IOArgs provideIOArgs() {
-        int receiveSize;
-        if (Objects.isNull(packet)) {
-            receiveSize = 4;
-        } else {
-            receiveSize = (int) Math.min(total - position, ioArgs.capacity());
-        }
-        //  设置本次接收数据大小
-        ioArgs.limit(receiveSize);
-        return ioArgs;
+        return writer.takeTOArgs();
     }
 
     @Override
     public void onConsumeCompleted(IOArgs args) {
-        assemblePacket(args);
+        do {
+            writer.consumeIOArgs(args);
+        } while (args.remained());
         // 继续接收下一条数据
         registerReceive();
     }
@@ -128,6 +80,17 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
     @Override
     public void onConsumeFailed(IOArgs args, Exception ex) {
         log.error(ex);
+    }
+
+    @Override
+    public ReceivePacket<? extends OutputStream, ?> takePacket(byte type, long length, byte[] headerInfo) {
+        return receiveRacketCallback.onArrivedNewPacket(type, length);
+    }
+
+    @Override
+    public void completedPacket(ReceivePacket<? extends OutputStream, ?> packet, boolean isSucceed) {
+        CloseUtil.close(packet);
+        receiveRacketCallback.onReceivePacketCompleted(packet);
     }
 
 }

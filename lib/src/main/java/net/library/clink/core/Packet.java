@@ -42,6 +42,15 @@ public abstract class Packet<Stream extends Closeable> implements Closeable {
     public abstract byte type();
 
     /**
+     * 头部额外信息，用于携带额外的校验信息
+     *
+     * @return byte数组，最大255长度
+     */
+    public byte[] headerInfo() {
+        return null;
+    }
+
+    /**
      * 对外获取当前实例的流操作
      */
     public final Stream open() {

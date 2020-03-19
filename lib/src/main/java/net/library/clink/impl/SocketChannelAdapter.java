@@ -8,6 +8,7 @@ import net.library.clink.util.CloseUtil;
 
 import java.io.IOException;
 import java.nio.channels.SocketChannel;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class SocketChannelAdapter implements Sender, Receiver {
@@ -42,7 +43,28 @@ public class SocketChannelAdapter implements Sender, Receiver {
         if (isClosed.get()) {
             throw new IOException("Current channel is closed!");
         }
-        return ioProvider.registerInput(socketChannel, inputCallBack);
+        return ioProvider.registerInput(socketChannel, new IOProvider.HandleInputCallBack() {
+            @Override
+            protected void canProviderInput() {
+                if (isClosed.get()) {
+                    return;
+                }
+                IOArgs ioArgs = receiveIOEventProcessor.provideIOArgs();
+                try {
+                    // 具体的读取操作
+                    if (Objects.isNull(ioArgs)) {
+                        receiveIOEventProcessor.onConsumeFailed(null, new IOException("Provide IOArgs is null."));
+                    } else if (ioArgs.readFrom(socketChannel) > 0) {
+                        // 读取完成回调
+                        receiveIOEventProcessor.onConsumeCompleted(ioArgs);
+                    } else {
+                        receiveIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot read any data!"));
+                    }
+                } catch (IOException ignored) {
+                    CloseUtil.close(SocketChannelAdapter.this);
+                }
+            }
+        });
     }
 
     @Override
@@ -55,52 +77,31 @@ public class SocketChannelAdapter implements Sender, Receiver {
         if (isClosed.get()) {
             throw new IOException("Current channel is closed!");
         }
-        return ioProvider.registerOutput(socketChannel, outputCallBack);
+        return ioProvider.registerOutput(socketChannel, new IOProvider.HandleOutputCallback() {
+
+            @Override
+            protected void canProviderOutput() {
+                if (isClosed.get()) {
+                    return;
+                }
+                IOArgs ioArgs = sendIOEventProcessor.provideIOArgs();
+                try {
+                    // 具体的发送操作
+                    if (Objects.isNull(ioArgs)) {
+                        sendIOEventProcessor.onConsumeFailed(null, new IOException("Provide IOArgs is null."));
+                    } else if (ioArgs.writeTo(socketChannel) > 0) {
+                        // 发送完成回调
+                        sendIOEventProcessor.onConsumeCompleted(ioArgs);
+                    } else {
+                        sendIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot write any data!"));
+                    }
+                } catch (IOException ignored) {
+                    CloseUtil.close(SocketChannelAdapter.this);
+                }
+            }
+
+        });
     }
-
-    private IOProvider.HandleInputCallBack inputCallBack = new IOProvider.HandleInputCallBack() {
-        @Override
-        protected void canProviderInput() {
-            if (isClosed.get()) {
-                return;
-            }
-            IOArgs ioArgs = receiveIOEventProcessor.provideIOArgs();
-            try {
-                // 具体的读取操作
-                if (ioArgs.readFrom(socketChannel) > 0) {
-                    // 读取完成回调
-                    receiveIOEventProcessor.onConsumeCompleted(ioArgs);
-                } else {
-                    receiveIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot read any data!"));
-                }
-            } catch (IOException ignored) {
-                CloseUtil.close(SocketChannelAdapter.this);
-            }
-        }
-    };
-
-    private IOProvider.HandleOutputCallback outputCallBack = new IOProvider.HandleOutputCallback() {
-
-        @Override
-        protected void canProviderOutput() {
-            if (isClosed.get()) {
-                return;
-            }
-            IOArgs ioArgs = sendIOEventProcessor.provideIOArgs();
-            try {
-                // 具体的发送操作
-                if (ioArgs.writeTo(socketChannel) > 0) {
-                    // 发送完成回调
-                    sendIOEventProcessor.onConsumeCompleted(ioArgs);
-                } else {
-                    sendIOEventProcessor.onConsumeFailed(ioArgs, new IOException("Cannot write any data!"));
-                }
-            } catch (IOException ignored) {
-                CloseUtil.close(SocketChannelAdapter.this);
-            }
-        }
-
-    };
 
     @Override
     public void close() {
