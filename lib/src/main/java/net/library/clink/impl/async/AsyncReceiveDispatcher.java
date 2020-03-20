@@ -70,9 +70,12 @@ public class AsyncReceiveDispatcher implements ReceiveDispatcher, IOArgs.IOArgsE
 
     @Override
     public void onConsumeCompleted(IOArgs args) {
+        if (isClosed.get()) {
+            return;
+        }
         do {
             writer.consumeIOArgs(args);
-        } while (args.remained());
+        } while (args.remained() && !isClosed.get());
         // 继续接收下一条数据
         registerReceive();
     }

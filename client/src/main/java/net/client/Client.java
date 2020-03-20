@@ -51,7 +51,7 @@ public class Client {
         do {
             // 键盘读取一行
             String line = input.readLine();
-            if ("00bye00".equalsIgnoreCase(line)) {
+            if (Objects.isNull(line) || line.length() == 0 || "00bye00".equalsIgnoreCase(line)) {
                 break;
             }
             // 发送文件 --f url

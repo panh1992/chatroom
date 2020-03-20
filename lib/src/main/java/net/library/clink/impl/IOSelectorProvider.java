@@ -5,11 +5,14 @@ import net.library.clink.core.IOProvider;
 import net.library.clink.util.CloseUtil;
 
 import java.io.IOException;
+import java.nio.channels.CancelledKeyException;
 import java.nio.channels.ClosedChannelException;
+import java.nio.channels.ClosedSelectorException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -56,55 +59,15 @@ public class IOSelectorProvider implements IOProvider {
     }
 
     private void startRead() {
-        Thread thread = new Thread("Clink IOSelectorProvider ReadSelector Thread") {
-            @Override
-            public void run() {
-                while (!isClosed.get()) {
-                    try {
-                        if (readSelector.select() == 0) {
-                            waitSelection(isRegisterInput);
-                            continue;
-                        }
-                    } catch (IOException e) {
-                        log.error(e);
-                    }
-                    Set<SelectionKey> selectionKeys = readSelector.selectedKeys();
-                    for (SelectionKey selectionKey : selectionKeys) {
-                        if (selectionKey.isValid()) {
-                            handleSelection(selectionKey, SelectionKey.OP_READ, inputCallBackMap, inputHandlerPool);
-                        }
-                    }
-                    selectionKeys.clear();
-                }
-            }
-        };
+        Thread thread = new SelectThread("Clink IOSelectorProvider ReadSelector Thread", isClosed,
+                isRegisterInput, readSelector, inputCallBackMap, inputHandlerPool, SelectionKey.OP_READ);
         thread.setPriority(Thread.MAX_PRIORITY);
         thread.start();
     }
 
     private void startWrite() {
-        Thread thread = new Thread("Clink IOSelectorProvider WriteSelector Thread") {
-            @Override
-            public void run() {
-                while (!isClosed.get()) {
-                    try {
-                        if (writeSelector.select() == 0) {
-                            waitSelection(isRegisterOutput);
-                            continue;
-                        }
-                    } catch (IOException e) {
-                        log.error(e);
-                    }
-                    Set<SelectionKey> selectionKeys = writeSelector.selectedKeys();
-                    for (SelectionKey selectionKey : selectionKeys) {
-                        if (selectionKey.isValid()) {
-                            handleSelection(selectionKey, SelectionKey.OP_WRITE, outputCallBackMap, outputHandlerPool);
-                        }
-                    }
-                    selectionKeys.clear();
-                }
-            }
-        };
+        Thread thread = new SelectThread("Clink IOSelectorProvider WriteSelector Thread", isClosed,
+                isRegisterOutput, writeSelector, outputCallBackMap, outputHandlerPool, SelectionKey.OP_WRITE);
         thread.setPriority(Thread.MAX_PRIORITY);
         thread.start();
     }
@@ -117,7 +80,7 @@ public class IOSelectorProvider implements IOProvider {
 
     @Override
     public void unRegisterInput(SocketChannel socketChannel) {
-        unRegisterSelection(socketChannel, readSelector, inputCallBackMap);
+        unRegisterSelection(socketChannel, readSelector, inputCallBackMap, isRegisterInput);
     }
 
     @Override
@@ -128,7 +91,7 @@ public class IOSelectorProvider implements IOProvider {
 
     @Override
     public void unRegisterOutput(SocketChannel socketChannel) {
-        unRegisterSelection(socketChannel, writeSelector, outputCallBackMap);
+        unRegisterSelection(socketChannel, writeSelector, outputCallBackMap, isRegisterOutput);
     }
 
     @Override
@@ -138,8 +101,6 @@ public class IOSelectorProvider implements IOProvider {
             outputHandlerPool.shutdown();
             inputCallBackMap.clear();
             outputCallBackMap.clear();
-            readSelector.wakeup();
-            writeSelector.wakeup();
             CloseUtil.close(readSelector, writeSelector);
         }
     }
@@ -182,7 +143,7 @@ public class IOSelectorProvider implements IOProvider {
                     runnableMap.put(selectionKey, runnable);
                 }
                 return selectionKey;
-            } catch (ClosedChannelException e) {
+            } catch (ClosedChannelException | CancelledKeyException | ClosedSelectorException e) {
                 return null;
             } finally {
                 // 解除锁定状态
@@ -197,26 +158,92 @@ public class IOSelectorProvider implements IOProvider {
     }
 
     private static void unRegisterSelection(SocketChannel socketChannel, Selector selector,
-                                            Map<SelectionKey, Runnable> runnableMap) {
-        if (socketChannel.isRegistered()) {
-            SelectionKey selectionKey = socketChannel.keyFor(selector);
-            if (Objects.nonNull(selectionKey)) {
-                // 取消监听的方法， 取消所有事件
-                selectionKey.cancel();
-                runnableMap.remove(selectionKey);
-                selector.wakeup();
+                                            Map<SelectionKey, Runnable> runnableMap, AtomicBoolean locker) {
+        synchronized (locker) {
+            locker.set(true);
+            selector.wakeup();
+            try {
+                if (socketChannel.isRegistered()) {
+                    SelectionKey selectionKey = socketChannel.keyFor(selector);
+                    if (Objects.nonNull(selectionKey)) {
+                        // 取消监听的方法， 取消所有事件
+                        selectionKey.cancel();
+                        runnableMap.remove(selectionKey);
+                    }
+                }
+            } finally {
+                locker.set(false);
+                try {
+                    locker.notifyAll();
+                } catch (Exception ignored) {
+                }
             }
         }
     }
 
     private static void handleSelection(SelectionKey selectionKey, int keyOps,
-                                        Map<SelectionKey, Runnable> inputCallBackMap, ExecutorService inputHandlerPool) {
-        // 取消继续对keyOps的监听
-        selectionKey.interestOps(selectionKey.readyOps() & ~keyOps);
+                                        Map<SelectionKey, Runnable> inputCallBackMap, ExecutorService inputHandlerPool,
+                                        AtomicBoolean locker) {
+        synchronized (locker) {
+            try {
+                // 取消继续对keyOps的监听
+                selectionKey.interestOps(selectionKey.readyOps() & ~keyOps);
+            } catch (CancelledKeyException e) {
+                return;
+            }
+
+        }
         Runnable runnable = inputCallBackMap.get(selectionKey);
         if (Objects.nonNull(runnable) && !inputHandlerPool.isShutdown()) {
             // 异步调度
             inputHandlerPool.execute(runnable);
+        }
+    }
+
+    static class SelectThread extends Thread {
+        private final AtomicBoolean isClosed;
+        private final AtomicBoolean locker;
+        private final Selector selector;
+        private final Map<SelectionKey, Runnable> callMap;
+        private final ExecutorService pool;
+        private final int keyOps;
+
+        SelectThread(String name, AtomicBoolean isClosed, AtomicBoolean locker, Selector selector,
+                     Map<SelectionKey, Runnable> callMap, ExecutorService pool, int keyOps) {
+            super(name);
+            this.isClosed = isClosed;
+            this.locker = locker;
+            this.selector = selector;
+            this.callMap = callMap;
+            this.pool = pool;
+            this.keyOps = keyOps;
+        }
+
+        @Override
+        public void run() {
+            while (!isClosed.get()) {
+                try {
+                    if (selector.select() == 0) {
+                        waitSelection(locker);
+                        continue;
+                    } else if (locker.get()) {
+                        waitSelection(locker);
+                    }
+                    Set<SelectionKey> selectionKeys = selector.selectedKeys();
+                    Iterator<SelectionKey> iterator = selectionKeys.iterator();
+                    while (iterator.hasNext()) {
+                        SelectionKey selectionKey = iterator.next();
+                        if (selectionKey.isValid()) {
+                            handleSelection(selectionKey, keyOps, callMap, pool, locker);
+                        }
+                        iterator.remove();
+                    }
+                } catch (IOException e) {
+                    log.error(e);
+                } catch (ClosedSelectorException ignored) {
+                    break;
+                }
+            }
         }
     }
 

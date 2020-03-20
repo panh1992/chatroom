@@ -10,6 +10,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.Objects;
 
 @Log4j2
 public class Server {
@@ -30,7 +31,7 @@ public class Server {
         String line;
         do {
             line = bufferedReader.readLine();
-            if ("00bye00".equalsIgnoreCase(line)) {
+            if (Objects.isNull(line) || line.length() == 0 || "00bye00".equalsIgnoreCase(line)) {
                 break;
             }
             tcpServer.broadcast(line);

@@ -140,6 +140,7 @@ public class TCPServer implements ClientHandler.CloseNotifyCallBack {
                                         TCPServer.this, TCPServer.this.cachePath);
                                 synchronized (TCPServer.this) {
                                     clientHandlerList.add(clientHandler);
+                                    log.info("当前客户端连接数量: {}", clientHandlerList.size());
                                 }
                             } catch (IOException e) {
                                 log.error("客户端连接异常，", e);

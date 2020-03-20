@@ -27,14 +27,11 @@ public class AsyncSendDispatcher implements SendDispatcher, IOArgs.IOArgsEventPr
 
     private final AsyncPacketReader reader;
 
-    private final Object queueLock;
-
     {
         this.sendPacketQueue = new ConcurrentLinkedDeque<>();
         this.isSending = new AtomicBoolean();
         this.isClosed = new AtomicBoolean(false);
         this.reader = new AsyncPacketReader(this);
-        this.queueLock = new Object();
     }
 
     public AsyncSendDispatcher(Sender sender) {
@@ -44,23 +41,13 @@ public class AsyncSendDispatcher implements SendDispatcher, IOArgs.IOArgsEventPr
 
     @Override
     public void send(SendPacket<? extends InputStream> packet) {
-        synchronized (queueLock) {
-            sendPacketQueue.offer(packet);
-            if (isSending.compareAndSet(false, true)) {
-                if (reader.requestTakePacket()) {
-                    requestSend();
-                }
-            }
-        }
+        sendPacketQueue.offer(packet);
+        requestSend();
     }
 
     @Override
     public void cancel(SendPacket<? extends InputStream> packet) {
-        boolean isRemove;
-        synchronized (queueLock) {
-            isRemove = sendPacketQueue.remove(packet);
-        }
-        if (isRemove) {
+        if (sendPacketQueue.remove(packet)) {
             packet.cancel();
             return;
         }
@@ -70,14 +57,9 @@ public class AsyncSendDispatcher implements SendDispatcher, IOArgs.IOArgsEventPr
 
     @Override
     public SendPacket<? extends InputStream> takePacket() {
-        SendPacket<? extends InputStream> packet;
-        synchronized (queueLock) {
-            packet = sendPacketQueue.poll();
-            if (Objects.isNull(packet)) {
-                // 队列为空，取消发送状态
-                isSending.set(false);
-                return null;
-            }
+        SendPacket<? extends InputStream> packet = sendPacketQueue.poll();
+        if (Objects.isNull(packet)) {
+            return null;
         }
         if (packet.isCanceled()) {
             // 已取消，不用发送
@@ -100,10 +82,21 @@ public class AsyncSendDispatcher implements SendDispatcher, IOArgs.IOArgsEventPr
      * 请求网络进行数据发送
      */
     private void requestSend() {
-        try {
-            sender.postSendAsync();
-        } catch (IOException e) {
-            closeAndNotify();
+        synchronized (isSending) {
+            if (isSending.get() || isClosed.get()) {
+                return;
+            }
+            // 返回true代表当前有数据需要发送
+            if (reader.requestTakePacket()) {
+                try {
+                    boolean isSucceed = sender.postSendAsync();
+                    if (isSucceed) {
+                        isSending.set(true);
+                    }
+                } catch (IOException e) {
+                    closeAndNotify();
+                }
+            }
         }
     }
 
@@ -114,32 +107,35 @@ public class AsyncSendDispatcher implements SendDispatcher, IOArgs.IOArgsEventPr
     @Override
     public void close() {
         if (isClosed.compareAndSet(false, true)) {
-            isSending.set(false);
             // reader关闭
             reader.close();
+            sendPacketQueue.clear();
+            synchronized (isSending) {
+                isSending.set(false);
+            }
         }
     }
 
     @Override
     public IOArgs provideIOArgs() {
-        return reader.fillData();
+        return isClosed.get() ? null : reader.fillData();
     }
 
     @Override
     public void onConsumeCompleted(IOArgs args) {
-        // 继续发送当前的包
-        if (reader.requestTakePacket()) {
-            requestSend();
+        synchronized (isSending) {
+            isSending.set(false);
         }
+        requestSend();
     }
 
     @Override
     public void onConsumeFailed(IOArgs args, Exception ex) {
-        if (Objects.nonNull(args)) {
-            log.error(ex);
-        } else {
-            // TODO 进行其他操作
+        log.error(ex);
+        synchronized (isSending) {
+            isSending.set(false);
         }
+        requestSend();
     }
 
 }
